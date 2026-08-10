@@ -1,0 +1,38 @@
+name: 龍蝦 AI 學習 Agent 自動排程
+
+on:
+  schedule:
+    # 每天台灣時間早上 7:00 (UTC 23:00) 自動觸發
+    - cron: '0 23 * * *'
+  workflow_dispatch: # 支援在 GitHub 網頁上手動點擊執行
+
+jobs:
+  run-agent:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 檢查並下載專案程式碼
+        uses: actions/checkout@v3
+
+      - name: 設定 Python 環境
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: 安裝套件
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: 執行龍蝦 Agent 腳本
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: |
+          python study_agent.py
+
+      - name: 自動將產生的每日考卷/重點 Commit 並推送到 GitHub
+        run: |
+          git config --global user.name "GitHub Action Agent"
+          git config --global user.email "agent@github.com"
+          git add .
+          git commit -m "🤖 [Auto] 龍蝦 Agent 自動更新每日複習重點與考卷" || exit 0
+          git push
