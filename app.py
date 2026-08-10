@@ -1,23 +1,22 @@
 import streamlit as st
-from google import genai
-from google.genai import types
+from groq import Groq
 import pypdf
 import io
 
 # 1. 頁面配置
 try:
-    st.set_page_config(page_title="Gemini + NotebookLM 高中 10 科全能 AI 助理", icon="📚", layout="wide")
+    st.set_page_config(page_title="Groq 高中 10 科全能 AI 助理", icon="📚", layout="wide")
 except Exception:
     pass
 
-st.title("📚 Gemini + NotebookLM 高中 10 科全能 AI 助理")
+st.title("⚡ Groq 高中 10 科全能 AI 助理 (極速解答版)")
 
-# 2. API Key 設定
-if "GEMINI_API_KEY" in st.secrets:
-    api_key = st.secrets["GEMINI_API_KEY"]
+# 2. Groq API Key 設定
+if "GROQ_API_KEY" in st.secrets:
+    api_key = st.secrets["GROQ_API_KEY"]
 else:
-    api_key = st.sidebar.text_input("請輸入 Gemini API Key：", type="password")
-    st.sidebar.markdown("👉 [免費申請 Google Gemini API Key](https://aistudio.google.com/)")
+    api_key = st.sidebar.text_input("請輸入 Groq API Key (gsk_...)：", type="password")
+    st.sidebar.markdown("👉 [免費申請 Groq API Key](https://console.groq.com/keys)")
 
 # 3. 初始化各科專屬記憶庫與歷史紀錄
 SUBJECTS = ["國文", "英文", "數學", "物理", "化學", "地球科學", "生物", "地理", "歷史", "公民"]
@@ -30,7 +29,6 @@ if "messages" not in st.session_state:
 
 # 4. 側邊欄：10 科選擇與專屬學習重點庫
 st.sidebar.header("⚙️ 學習設定")
-
 subject = st.sidebar.selectbox("選擇科目：", SUBJECTS)
 
 # 📖 專屬資料庫顯示區
@@ -41,7 +39,6 @@ if current_db:
     db_text = "\n".join([f"{i+1}. {item}" for i, item in enumerate(current_db)])
     st.sidebar.text_area("歷史學習筆記 (自動累積)：", value=db_text, height=200, disabled=True)
     
-    # 提供下載該科重點筆記功能
     st.sidebar.download_button(
         label=f"📥 下載【{subject}】複習筆記 (.txt)",
         data=f"=== 【{subject}】對話重點總結庫 ===\n\n" + db_text,
@@ -51,10 +48,10 @@ if current_db:
 else:
     st.sidebar.info("目前尚無重點紀錄，發問後 AI 會自動整理加入！")
 
-# 📖 NotebookLM 講義上傳區
-st.sidebar.subheader("📖 NotebookLM 講義上傳")
+# 📖 講義上傳區
+st.sidebar.subheader("📖 參考講義上傳 (TXT, PDF)")
 uploaded_docs = st.sidebar.file_uploader(
-    f"上傳【{subject}】講義/筆記 (PDF, TXT)：", 
+    f"上傳【{subject}】講義/筆記：", 
     type=["pdf", "txt"],
     accept_multiple_files=True
 )
@@ -73,8 +70,6 @@ if uploaded_docs:
                     doc_text += f"\n[檔案: {doc.name} - 第 {i+1} 頁]\n" + extracted
         knowledge_base += f"\n=== 參考文件: {doc.name} ===\n{doc_text}\n"
 
-enable_web_search = st.sidebar.checkbox("開啟 Google 即時聯網搜尋", value=False)
-
 # 5. 10 科 Prompt 設定
 prompts = {
     "國文": "你是一位高中國文老師。解析課文主旨、古文註釋、修辭技巧或國寫作文，提供深入且白話的說明。",
@@ -89,100 +84,62 @@ prompts = {
     "公民": "你是一位高中公民老師。解析法律、政治、經濟與社會學的核心概念，並結合時事案例。"
 }
 
-# 清除當前科目歷史紀錄按鈕
 if st.sidebar.button(f"🧹 清除【{subject}】的對話與重點庫"):
     st.session_state.messages[subject] = []
     st.session_state.subjects_db[subject] = []
     st.rerun()
 
-# 6. 渲染目前選定科目的歷史對話
+# 6. 渲染目前科目的對話紀錄
 for msg in st.session_state.messages[subject]:
     with st.chat_message(msg["role"]):
         st.write(msg["content"])
 
 # 7. 主對話區
-st.markdown(f"### 💬 【{subject}】AI 學習助理")
-user_image = st.file_uploader("📷 上傳題目照片/考卷截圖 (選填)：", type=["png", "jpg", "jpeg"])
-
 if user_input := st.chat_input(f"請輸入關於【{subject}】的問題..."):
     if not api_key:
-        st.error("⚠️ 請先在左側邊欄輸入你的 Gemini API Key！")
+        st.error("⚠️ 請先在左側邊欄輸入你的 Groq API Key (gsk_...)！")
     else:
-        # 紀錄使用者對話
         st.session_state.messages[subject].append({"role": "user", "content": user_input})
         with st.chat_message("user"):
             st.write(user_input)
-            if user_image:
-                st.image(user_image, caption="已上傳題目照片", width=300)
 
-        # 組合 System Instruction
-        system_instruction = prompts[subject]
+        system_prompt = prompts[subject]
         if knowledge_base:
-            system_instruction += f"\n\n【講義資料】：\n{knowledge_base}"
+            system_prompt += f"\n\n【參考講義資料】：\n{knowledge_base}\n回答時請盡可能參考上述資料並說明出處。"
 
-        # 準備 API 內容
-        contents = []
-        if user_image:
-            image_bytes = user_image.read()
-            contents.append(types.Part.from_bytes(data=image_bytes, mime_type=user_image.type))
-        contents.append(user_input)
-
-        tools = [{"google_search": {}}] if enable_web_search else []
-
-        config = types.GenerateContentConfig(
-            system_instruction=system_instruction,
-            temperature=0.3,
-            tools=tools if tools else None
-        )
+        # 組成 Message 格式
+        api_messages = [{"role": "system", "content": system_prompt}]
+        for msg in st.session_state.messages[subject]:
+            api_messages.append({"role": msg["role"], "content": msg["content"]})
 
         with st.chat_message("assistant"):
             try:
-                client = genai.Client(api_key=api_key)
+                client = Groq(api_key=api_key)
                 
-                # 1. 產生主要解答
-                response = client.models.generate_content(
-                    model='gemini-2.5-flash',
-                    contents=contents,
-                    config=config
+                # 1. 呼叫 Groq API (選用目前最頂級的 Llama 3.3 70B 模型)
+                completion = client.chat.completions.create(
+                    model="llama-3.3-70b-versatile",
+                    messages=api_messages,
+                    temperature=0.3,
                 )
-                reply = response.text
+                reply = completion.choices[0].message.content
                 st.write(reply)
                 st.session_state.messages[subject].append({"role": "assistant", "content": reply})
 
                 # 2. 自動總結重點並存入【專屬資料庫】
-                summary_prompt = (
-                    f"請針對以下這段【{subject}】的對話內容，用最簡短的 1 到 2 句話總結一個關鍵學習重點或公式（不需包含廢話與解答過程）：\n"
-                    f"問：{user_input}\n答：{reply}"
+                summary_messages = [
+                    {"role": "system", "content": "你是一位精準的筆記整理助手。"},
+                    {"role": "user", "content": f"請將以下【{subject}】的對話，用 1 到 2 句話總結為關鍵學習重點：\n問：{user_input}\n答：{reply}"}
+                ]
+                summary_res = client.chat.completions.create(
+                    model="llama-3.3-70b-versatile",
+                    messages=summary_messages,
+                    temperature=0.2
                 )
-                summary_response = client.models.generate_content(
-                    model='gemini-2.5-flash',
-                    contents=summary_prompt
-                )
-                new_key_point = summary_response.text.strip()
-                
-                # 追加寫入該科資料庫
+                new_key_point = summary_res.choices[0].message.content.strip()
                 st.session_state.subjects_db[subject].append(new_key_point)
-                st.rerun() # 重新載入頁面更新側邊欄重點庫
+                
+                st.rerun()
 
             except Exception as e:
-                st.error(f"Gemini API 連線失敗：{e}")
-import re
-import urllib.request
-
-st.sidebar.subheader("🔗 Google Drive 連結載入")
-gdrive_url = st.sidebar.text_input("貼上 Google Drive 檔案共用連結：")
-
-if gdrive_url:
-    # 使用正則表達式抓取 Google Drive 檔案 ID
-    file_id_match = re.search(r'/d/([a-zA-Z0-9_-]+)', gdrive_url) or re.search(r'id=([a-zA-Z0-9_-]+)', gdrive_url)
-    if file_id_match:
-        file_id = file_id_match.group(1)
-        download_url = f'https://drive.google.com/uc?export=download&id={file_id}'
-        try:
-            # 自動下載檔案內容
-            with urllib.request.urlopen(download_url) as response:
-                content = response.read().decode('utf-8', errors='ignore')
-                knowledge_base += f"\n=== 雲端硬碟檔案 (ID: {file_id}) ===\n" + content
-            st.sidebar.success("✅ 成功從 Google Drive 載入講義！")
-        except Exception as e:
-            st.sidebar.error(f"下載失敗，請確認檔案已設定為「知道連結的人皆可檢視」：{e}")
+                st.error(f"Groq API 連線失敗：{e}")
