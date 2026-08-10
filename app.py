@@ -166,3 +166,23 @@ if user_input := st.chat_input(f"請輸入關於【{subject}】的問題..."):
 
             except Exception as e:
                 st.error(f"Gemini API 連線失敗：{e}")
+import re
+import urllib.request
+
+st.sidebar.subheader("🔗 Google Drive 連結載入")
+gdrive_url = st.sidebar.text_input("貼上 Google Drive 檔案共用連結：")
+
+if gdrive_url:
+    # 使用正則表達式抓取 Google Drive 檔案 ID
+    file_id_match = re.search(r'/d/([a-zA-Z0-9_-]+)', gdrive_url) or re.search(r'id=([a-zA-Z0-9_-]+)', gdrive_url)
+    if file_id_match:
+        file_id = file_id_match.group(1)
+        download_url = f'https://drive.google.com/uc?export=download&id={file_id}'
+        try:
+            # 自動下載檔案內容
+            with urllib.request.urlopen(download_url) as response:
+                content = response.read().decode('utf-8', errors='ignore')
+                knowledge_base += f"\n=== 雲端硬碟檔案 (ID: {file_id}) ===\n" + content
+            st.sidebar.success("✅ 成功從 Google Drive 載入講義！")
+        except Exception as e:
+            st.sidebar.error(f"下載失敗，請確認檔案已設定為「知道連結的人皆可檢視」：{e}")
