@@ -2,6 +2,8 @@ import streamlit as st
 from groq import Groq
 import pypdf
 import io
+import re
+import requests
 
 # 1. 頁面配置
 try:
@@ -9,7 +11,7 @@ try:
 except Exception:
     pass
 
-st.title("⚡ Groq 高中 10 科全能 AI 助理 (極速解答版)")
+st.title("⚡ Groq 高中 10 科全能 AI 助理 (支援 Google Drive 雲端硬碟載入)")
 
 # 2. Groq API Key 設定
 if "GROQ_API_KEY" in st.secrets:
@@ -37,7 +39,7 @@ current_db = st.session_state.subjects_db[subject]
 
 if current_db:
     db_text = "\n".join([f"{i+1}. {item}" for i, item in enumerate(current_db)])
-    st.sidebar.text_area("歷史學習筆記 (自動累積)：", value=db_text, height=200, disabled=True)
+    st.sidebar.text_area("歷史學習筆记 (自動累積)：", value=db_text, height=180, disabled=True)
     
     st.sidebar.download_button(
         label=f"📥 下載【{subject}】複習筆記 (.txt)",
@@ -48,26 +50,67 @@ if current_db:
 else:
     st.sidebar.info("目前尚無重點紀錄，發問後 AI 會自動整理加入！")
 
-# 📖 講義上傳區
-st.sidebar.subheader("📖 參考講義上傳 (TXT, PDF)")
+# ☁️ Google 雲端硬碟 & 本地上傳區
+st.sidebar.subheader("📖 講義載入 (雲端硬碟 / 本地)")
+
+# 方案 1: Google Drive 連結
+gdrive_url = st.sidebar.text_input("🔗 貼上 Google Drive 共用連結：", help="請確保檔案設定為『知道連結的人皆可檢視』")
+
+# 方案 2: 本地電腦檔案上傳
 uploaded_docs = st.sidebar.file_uploader(
-    f"上傳【{subject}】講義/筆記：", 
+    f"📤 或從電腦上傳【{subject}】講義 (PDF, TXT)：", 
     type=["pdf", "txt"],
     accept_multiple_files=True
 )
 
 knowledge_base = ""
+
+# 解析 Google Drive 檔案內容的函式
+def parse_pdf_bytes(file_bytes, filename):
+    text = ""
+    try:
+        pdf_reader = pypdf.PdfReader(io.BytesIO(file_bytes))
+        for i, page in enumerate(pdf_reader.pages):
+            extracted = page.extract_text()
+            if extracted:
+                text += f"\n[檔案: {filename} - 第 {i+1} 頁]\n" + extracted
+    except Exception as e:
+        text = f"[PDF 解析失敗: {e}]"
+    return text
+
+# 讀取 Google Drive 連結
+if gdrive_url:
+    # 擷取 File ID
+    file_id_match = re.search(r'/d/([a-zA-Z0-9_-]+)', gdrive_url) or re.search(r'id=([a-zA-Z0-9_-]+)', gdrive_url)
+    if file_id_match:
+        file_id = file_id_match.group(1)
+        download_url = f'https://drive.google.com/uc?export=download&id={file_id}'
+        try:
+            res = requests.get(download_url)
+            if res.status_code == 200:
+                content_type = res.headers.get('Content-Type', '')
+                if 'application/pdf' in content_type or gdrive_url.endswith('.pdf'):
+                    doc_text = parse_pdf_bytes(res.content, f"GoogleDrive_{file_id}.pdf")
+                else:
+                    doc_text = res.content.decode('utf-8', errors='ignore')
+                
+                knowledge_base += f"\n=== Google Drive 講義 (ID: {file_id}) ===\n{doc_text}\n"
+                st.sidebar.success("✅ 成功載入 Google Drive 雲端講義！")
+            else:
+                st.sidebar.error("下載失敗，請確認檔案已設為「知道連結的人皆可檢視」。")
+        except Exception as e:
+            st.sidebar.error(f"雲端硬碟連線失敗：{e}")
+    else:
+        st.sidebar.warning("請輸入有效的 Google Drive 檔案共用連結")
+
+# 讀取本地上傳檔案
 if uploaded_docs:
     for doc in uploaded_docs:
         doc_text = ""
         if doc.name.endswith(".txt"):
             doc_text = doc.read().decode("utf-8")
         elif doc.name.endswith(".pdf"):
-            pdf_reader = pypdf.PdfReader(io.BytesIO(doc.read()))
-            for i, page in enumerate(pdf_reader.pages):
-                extracted = page.extract_text()
-                if extracted:
-                    doc_text += f"\n[檔案: {doc.name} - 第 {i+1} 頁]\n" + extracted
+            doc_text = parse_pdf_bytes(doc.read(), doc.name)
         knowledge_base += f"\n=== 參考文件: {doc.name} ===\n{doc_text}\n"
 
 # 5. 10 科 Prompt 設定
@@ -105,7 +148,7 @@ if user_input := st.chat_input(f"請輸入關於【{subject}】的問題..."):
 
         system_prompt = prompts[subject]
         if knowledge_base:
-            system_prompt += f"\n\n【參考講義資料】：\n{knowledge_base}\n回答時請盡可能參考上述資料並說明出處。"
+            system_prompt += f"\n\n【參考講義資料（來自雲端/檔案）】：\n{knowledge_base}\n回答時請盡可能參考上述資料。"
 
         # 組成 Message 格式
         api_messages = [{"role": "system", "content": system_prompt}]
@@ -116,7 +159,7 @@ if user_input := st.chat_input(f"請輸入關於【{subject}】的問題..."):
             try:
                 client = Groq(api_key=api_key)
                 
-                # 1. 呼叫 Groq API (選用目前最頂級的 Llama 3.3 70B 模型)
+                # 呼叫 Groq API (選用 Llama 3.3 70B 模型)
                 completion = client.chat.completions.create(
                     model="llama-3.3-70b-versatile",
                     messages=api_messages,
@@ -126,7 +169,7 @@ if user_input := st.chat_input(f"請輸入關於【{subject}】的問題..."):
                 st.write(reply)
                 st.session_state.messages[subject].append({"role": "assistant", "content": reply})
 
-                # 2. 自動總結重點並存入【專屬資料庫】
+                # 自動總結重點並存入【專屬資料庫】
                 summary_messages = [
                     {"role": "system", "content": "你是一位精準的筆記整理助手。"},
                     {"role": "user", "content": f"請將以下【{subject}】的對話，用 1 到 2 句話總結為關鍵學習重點：\n問：{user_input}\n答：{reply}"}
